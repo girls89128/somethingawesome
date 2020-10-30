@@ -1,0 +1,257 @@
+---
+always_allow_html: true
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      comment = "")
+```
+
+Did someone say Halloween?
+
+![](images/jason.gif)
+
+**NOT MY IMAGE. THE FINE FOLKS AT PARAMOUNT OWN IT!**
+
+## Scraping Data
+
+<<<<<<< HEAD
+Since we are rolling up on the spookiest holiday -- Halloweens, it might be worth pulling in some data on horror movies. Not surprisingly, Wikipedia has some information about the top-grossing horror movies of all time. 
+=======
+Since we are rolling up on the spookiest holiday -- Halloween, it might be worth pulling in some data on horror movies. Not surprisingly, Wikipedia has some information about the top-grossing horror movies of all time.
+>>>>>>> e8c459ba538fe2868c193e66a901a0766121709c
+
+```{r}
+library(data.table)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(rvest)
+
+topGrossingLink <- 
+  "https://en.wikipedia.org/wiki/List_of_highest-grossing_horror_films"
+
+horrorMovies <- read_html(topGrossingLink) %>% 
+  html_table(fill = TRUE) %>% 
+  `[[`(1)
+
+kable_material(kable(horrorMovies), 
+               c("striped", "hover"))
+```
+
+As per usual, we will likely need to clean some of those dollar values up just a little bit:
+
+```{r}
+horrorMovies$`Worldwide gross` <- gsub("\\$|,", 
+                                       "", 
+                                       horrorMovies$`Worldwide gross`)
+
+horrorMovies$`Worldwide gross` <- as.numeric(horrorMovies$`Worldwide gross`)
+```
+
+All looks good now!
+
+```{r, echo = FALSE}
+skimr::skim(horrorMovies$`Worldwide gross`)
+```
+
+Which studios tend to do well with making money off horror?
+
+```{r}
+horrorMovies <- as.data.table(horrorMovies)
+
+sortedStudio <- horrorMovies[, 
+                             .(average = mean(`Worldwide gross`)), 
+                             by = Studio][order(-average)]
+
+kable_material(kable(sortedStudio), 
+               c("striped", "hover"))
+```
+
+
+## Plotting Data
+
+Just for the fun of it, let's do some plotting over the years:
+
+```{r}
+ggplot(horrorMovies, aes(x = Year, y = `Worldwide gross`, label = Film)) +
+  ggrepel::geom_text_repel(size = 2) +
+  theme_minimal()
+
+# If you want to get fancy with plotly, that
+# code is below:
+
+# plot_ly(horrorMovies, x = ~Year, y = ~`Worldwide gross`,
+#         type = "scatter", mode = "markers",
+#         text = ~paste("Film: ", Film, '<br>Studio: ', Studio, sep = ""))
+```
+
+We saw some averages for the studios earlier, so let's get a better idea about each studios distribution within the list:
+
+```{r}
+ggplot(horrorMovies, aes(x = `Worldwide gross`, y = Studio)) +
+  geom_boxplot() + 
+  theme_minimal()
+
+# plot_ly(horrorMovies, x = ~`Worldwide gross`, y = ~Studio, 
+#         type = "box")
+```
+
+## Relationship Exploration
+
+Let's see if we can get into any relationships between movie information and money.
+
+We can load in our `horrorOut` data:
+
+```{r}
+load("data/horrorOut.RData")
+```
+
+And join it with our highest-grossing data:
+
+```{r}
+horrorOut$Year <- as.integer(horrorOut$Year)
+
+allData <- merge.data.table(horrorMovies, horrorOut, 
+                            by.x = c("Film", "Year"), 
+                            by.y = c("Title", "Year"))
+dim(allData)
+```
+
+It looks like we lost a few movies!
+
+I suppose you never know what might be creeping around with your data until you try to work with it!
+
+![](images/pennywise.gif)
+
+```{r}
+horrorMovies$Film[!horrorMovies$Film %in% horrorOut$Title]
+
+horrorOut$Title[!horrorMovies$Film %in% horrorOut$Title]
+```
+
+That's just silly...but since it is just a few, we won't worry about a fuzzy join.
+
+```{r}
+horrorMovies$Film[
+  horrorMovies$Film == "Resident Evil: The Final Chapter"
+  ] <- "Resident Evil the Final Chapter: Explore the Hive"
+
+horrorMovies$Film[
+  horrorMovies$Film == "Interview with the Vampire"
+  ] <- "Interview with the Vampire: The Vampire Chronicles"
+```
+
+Now, we should be set to join:
+
+```{r}
+allData <- merge.data.table(horrorMovies, horrorOut, 
+                            by.x = c("Film", "Year"), 
+                            by.y = c("Title", "Year"))
+
+dim(allData)
+```
+
+As per usual, we will need to clean up some variables before we can use them:
+
+```{r}
+ratingVars <- c("Internet Movie Database", 
+                "Metacritic", 
+                "Rotten Tomatoes")
+
+# We need to remove special characters in the ratings columns:
+
+allData[, 
+        (ratingVars) := lapply(.SD, function(x) {
+          as.numeric(gsub("/[0-1]+|%", "", x))
+        }), 
+        .SDcols = ratingVars]
+
+# And let's multiply IMDB by 10 to put it on the same scale as the others:
+
+allData$`Internet Movie Database` <- allData$`Internet Movie Database` * 10
+```
+
+Let's check on some correlations between the ratings and gross:
+
+```{r}
+corData <- allData[, 
+                   .(`Worldwide gross`, `Internet Movie Database`, 
+                     Metacritic, `Rotten Tomatoes`)]
+
+GGally::ggcorr(corData)
+```
+
+There are a few frequent fliers on this list, so let's see how those folks typically do:
+
+```{r}
+repeatedDirectors <- unique(allData$Director[duplicated(allData$Director)])
+
+repeatDirectorData <- allData[Director %in% repeatedDirectors, ]
+```
+
+Absolutely wild that 9 people account for about half of the top 50 money-wise, but what about quality?
+
+```{r}
+plotData <- melt.data.table(
+  repeatDirectorData[, 
+                     .(Director, `Rotten Tomatoes`, 
+                       Metacritic, `Internet Movie Database`)], 
+  id.vars = "Director", 
+  measure.vars = c("Rotten Tomatoes", 
+                   "Metacritic", "Internet Movie Database"))
+
+ggplot(plotData, 
+       aes(x = value, y = Director, color = variable)) + 
+  geom_boxplot() +
+  theme_minimal()
+```
+
+Seems like Jordan Peele's brand of socially-drive horror is quality. 
+
+Which movies are "Fresh"?
+
+```{r}
+allData[`Rotten Tomatoes` > 69, list(Film, `Rotten Tomatoes`)]
+```
+
+And then "Rotten"?
+
+```{r}
+allData[`Rotten Tomatoes` < 70, list(Film, `Rotten Tomatoes`)]
+```
+
+Let's see what a regression might get us:
+
+```{r}
+rtGross <- lm(`Worldwide gross` ~ `Rotten Tomatoes`, 
+              data = allData)
+```
+
+```{r, echo = FALSE, results='asis'}
+stargazer::stargazer(rtGross, type = "html", header = FALSE)
+```
+
+
+
+## Top 100
+
+```{r}
+top100Link <- "https://www.rottentomatoes.com/top/bestofrt/top_100_horror_movies/"
+
+allTables <- read_html(top100Link) %>% 
+  html_table() 
+  
+tableNames <- lapply(allTables, function(x) names(x))
+
+tableNumber <- grep("Rank", tableNames)
+
+top100Table <- allTables[[tableNumber]]
+
+top100Table$Title <- gsub("\\s\\(.*[0-9]{4}\\)$", "", top100Table$Title)
+
+allData$Film[allData$Film %in% top100Table$Title]
+```
+
+Cool stuff.
